@@ -54,7 +54,10 @@ export const sendOtp = async (req, res, next) => {
     }
 
     // Generate OTP
-    const otp = generateOTP();
+    // In development, use a fixed test OTP for easy testing
+    // In production, generate a random OTP
+    const isDevelopment = process.env.NODE_ENV === 'development' || !process.env.AWS_LAMBDA_FUNCTION_NAME;
+    const otp = isDevelopment ? '123456' : generateOTP();
     const expiryTime = getOTPExpiryTime();
 
     // Store or update OTP in database
@@ -66,18 +69,30 @@ export const sendOtp = async (req, res, next) => {
       [userId, otp, expiryTime, normalizedMobile]
     );
 
-    // TODO: Integrate with SMS service (Twilio, AWS SNS, etc.)
-    // For now, log OTP (REMOVE IN PRODUCTION)
-    console.log(`OTP for ${normalizedMobile}: ${otp}`);
+    if (isDevelopment) {
+      // In development, log the test OTP
+      console.log(`[DEV MODE] Test OTP for ${normalizedMobile}: ${otp}`);
+      console.log(`[DEV MODE] Use OTP: ${otp} for testing`);
+    } else {
+      // TODO: Integrate with SMS service (Twilio, AWS SNS, etc.)
+      // For production, send OTP via SMS
+      console.log(`OTP for ${normalizedMobile}: ${otp}`);
+      // TODO: Send SMS here
+    }
 
     res.status(200).json({
       success: true,
-      message: 'OTP sent successfully',
+      message: isDevelopment 
+        ? 'OTP sent successfully (DEV MODE - Use test OTP: 123456)' 
+        : 'OTP sent successfully',
       mobileNumber: normalizedMobile,
       isNewUser,
-      // Remove otp from response in production
-      // For development/testing only:
-      ...(process.env.NODE_ENV === 'development' && { otp })
+      // In development, include the test OTP in response
+      ...(isDevelopment && { 
+        otp,
+        devMode: true,
+        note: 'Using test OTP in development mode'
+      })
     });
   } catch (error) {
     console.error('Error sending OTP:', error);
@@ -130,33 +145,42 @@ export const verifyOtp = async (req, res, next) => {
 
     const userId = userResult.rows[0].id;
 
-    // Get OTP from database
-    const otpResult = await query(
-      'SELECT otp, expiry_time, created_at FROM otps WHERE user_id = $1 AND mobile_number = $2',
-      [userId, normalizedMobile]
-    );
+    // Check if we're in development mode
+    const isDevelopment = process.env.NODE_ENV === 'development' || !process.env.AWS_LAMBDA_FUNCTION_NAME;
+    
+    // In development, allow test OTP "123456" to work without database check
+    if (isDevelopment && otp === '123456') {
+      console.log(`[DEV MODE] Accepting test OTP: ${otp} for ${normalizedMobile}`);
+      // Skip database verification for test OTP in dev mode
+    } else {
+      // Get OTP from database
+      const otpResult = await query(
+        'SELECT otp, expiry_time, created_at FROM otps WHERE user_id = $1 AND mobile_number = $2',
+        [userId, normalizedMobile]
+      );
 
-    if (otpResult.rows.length === 0) {
-      return res.status(400).json({
-        error: 'OTP not found. Please request a new OTP'
-      });
-    }
+      if (otpResult.rows.length === 0) {
+        return res.status(400).json({
+          error: 'OTP not found. Please request a new OTP'
+        });
+      }
 
-    const storedOtp = otpResult.rows[0].otp;
-    const expiryTime = otpResult.rows[0].expiry_time;
+      const storedOtp = otpResult.rows[0].otp;
+      const expiryTime = otpResult.rows[0].expiry_time;
 
-    // Check if OTP is expired
-    if (isOTPExpired(expiryTime)) {
-      return res.status(400).json({
-        error: 'OTP has expired. Please request a new OTP'
-      });
-    }
+      // Check if OTP is expired
+      if (isOTPExpired(expiryTime)) {
+        return res.status(400).json({
+          error: 'OTP has expired. Please request a new OTP'
+        });
+      }
 
-    // Verify OTP
-    if (storedOtp !== otp) {
-      return res.status(400).json({
-        error: 'Invalid OTP'
-      });
+      // Verify OTP
+      if (storedOtp !== otp) {
+        return res.status(400).json({
+          error: 'Invalid OTP'
+        });
+      }
     }
 
     // OTP verified - create session (JWT token)
