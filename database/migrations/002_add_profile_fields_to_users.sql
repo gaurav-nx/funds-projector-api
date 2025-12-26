@@ -1,0 +1,20 @@
+-- Add profile fields to users table
+ALTER TABLE users 
+ADD COLUMN IF NOT EXISTS first_name VARCHAR(255),
+ADD COLUMN IF NOT EXISTS last_name VARCHAR(255),
+ADD COLUMN IF NOT EXISTS date_of_birth DATE,
+ADD COLUMN IF NOT EXISTS address TEXT,
+ADD COLUMN IF NOT EXISTS city VARCHAR(255),
+ADD COLUMN IF NOT EXISTS state VARCHAR(255),
+ADD COLUMN IF NOT EXISTS country VARCHAR(255),
+ADD COLUMN IF NOT EXISTS zipcode VARCHAR(20),
+ADD COLUMN IF NOT EXISTS avatar TEXT,
+ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT true,
+ADD COLUMN IF NOT EXISTS is_verified BOOLEAN DEFAULT false,
+ADD COLUMN IF NOT EXISTS created_by INTEGER REFERENCES users(id),
+ADD COLUMN IF NOT EXISTS updated_by INTEGER REFERENCES users(id);
+
+-- Create index on is_active for faster queries
+CREATE INDEX IF NOT EXISTS idx_users_is_active ON users(is_active);
+CREATE INDEX IF NOT EXISTS idx_users_is_verified ON users(is_verified);
+

@@ -1,0 +1,148 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Funds Project API - Serverless Express API with PostgreSQL
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 512
+    Runtime: nodejs20.x
+    Environment:
+      Variables:
+        NODE_ENV: production
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+    Description: Environment name
+  
+  DbSecretName:
+    Type: String
+    Default: funds-project/postgres
+    Description: Name or ARN of the secret in AWS Secrets Manager containing PostgreSQL credentials
+
+Resources:
+  # API Gateway HTTP API
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: !Ref Environment
+      CorsConfiguration:
+        AllowOrigins:
+          - "*"  # Configure with your CloudFront domain in production
+        AllowMethods:
+          - GET
+          - POST
+          - PUT
+          - DELETE
+          - OPTIONS
+        AllowHeaders:
+          - Content-Type
+          - Authorization
+        MaxAge: 300
+
+  # Lambda Security Group (allows outbound to RDS)
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Lambda function to access RDS
+      VpcId: vpc-061980329b965e525
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          DestinationSecurityGroupId: sg-08254d07e509b6bbe
+          Description: Allow outbound to RDS PostgreSQL
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: Allow all outbound (for Secrets Manager, etc.)
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-LambdaSG
+
+  # Security Group Rule: Allow Lambda to access RDS
+  LambdaToRDSSecurityGroupRule:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: sg-08254d07e509b6bbe
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      SourceSecurityGroupId: !Ref LambdaSecurityGroup
+      Description: Allow Lambda function to access RDS PostgreSQL
+
+  # Lambda Function
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: src/handler.handler
+      Runtime: nodejs20.x
+      MemorySize: 512
+      Timeout: 30
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+        SubnetIds:
+          - subnet-0762429ad1d17e7cd
+          - subnet-02bb52d97688ecf20
+      Environment:
+        Variables:
+          NODE_ENV: !Ref Environment
+          DB_SECRET_NAME: !Ref DbSecretName
+          JWT_SECRET: "your-secret-key-change-in-production" # TODO: Store in Secrets Manager
+          JWT_EXPIRES_IN: "7d"
+      Events:
+        ApiEvent:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /{proxy+}
+            Method: ANY
+        RootApiEvent:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /
+            Method: ANY
+      Policies:
+        # Allow access to AWS Secrets Manager
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - secretsmanager:GetSecretValue
+                - secretsmanager:DescribeSecret
+              Resource: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${DbSecretName}*"
+
+  # CloudWatch Log Group
+  ApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${ApiFunction}
+      RetentionInDays: 7
+
+Outputs:
+  ApiUrl:
+    Description: API Gateway HTTP API endpoint URL
+    Value: !Sub https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}
+    Export:
+      Name: !Sub ${AWS::StackName}-ApiUrl
+  
+  HttpApiId:
+    Description: HTTP API ID
+    Value: !Ref HttpApi
+    Export:
+      Name: !Sub ${AWS::StackName}-HttpApiId
+  
+  LambdaFunctionArn:
+    Description: Lambda Function ARN
+    Value: !GetAtt ApiFunction.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-LambdaFunctionArn
+
